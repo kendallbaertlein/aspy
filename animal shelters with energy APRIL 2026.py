@@ -1086,8 +1086,8 @@ def radiance_simulation(source_type='telelumen', ies2rad_input=None, sensor_type
         uniformity = min_lux / avg_lux if avg_lux > 0 else 0.0
         
         return {
-            # "coordinates": sensor_points,
-            # "lux_grid": lux_values,
+            "coordinates": sensor_points,
+            "lux_grid": lux_values,
             "average_lux": avg_lux,
             "min_lux": min_lux,
             "max_lux": max_lux,
@@ -1310,7 +1310,7 @@ class optimization_problem(ElementwiseProblem):
     def __init__(self, sources, wavelengths, rad_illuminance_h, rad_illuminance_v, max_lp_illuminance, 
                  target_illuminance_h=750, max_illum_h=1125, target_illuminance_v=0, target_medi=275, 
                  target_medi_nonhuman=0, min_dim=0.2, max_dim=10.0, species="Human", nonhuman_species=None,
-                 objective=None, dim_curves=None):
+                 objective=None, dim_curves=None, sensor_grid=False):
         # initialize variables        
         self.sources = sources # sources dataframe with spds
         self.wavelengths = wavelengths # wavelengths for the spds
@@ -1330,6 +1330,7 @@ class optimization_problem(ElementwiseProblem):
         self.species = species # species to optimize for
         self.objective = objective # objective(s) to optimize for 
         self.dim_curves = dim_curves # dimming curves for each source
+        self.sensor_grid = sensor_grid # whether to use sensor grid
         self.species_nonhuman = nonhuman_species # species to optimize for (non-human)
 
         #define variables
@@ -1338,11 +1339,15 @@ class optimization_problem(ElementwiseProblem):
             variables[f"source_{n}_on"]= Binary() # on or off
             variables[f"source_{n}_dim"]= Real(bounds=(self.min_dim,self.max_dim)) # percent dim for each source
 
-        # count of constraints : 2 CCT, 6 TM30, 2 Illuminance (horizontal), 1 MEDI if human (2 if nonhuman species is included)
+        sg = 0
+        if self.sensor_grid==True:
+            sg = 2
+
+        # count of constraints : 2 CCT, 6 TM30, 2 Illuminance (horizontal, +2 if sensor grid is used), 1 MEDI if human (2 if nonhuman species is included), 
         if nonhuman_species is not None:
-            total_constraints = 2 + 6 + 2 + 2
+            total_constraints = 2 + 6 + 2 + sg + 2 
         else:
-            total_constraints = 2 + 6 + 2 + 1 
+            total_constraints = 2 + 6 + 2 + sg + 1 
 
         # objective count
         if self.objective is None:
@@ -1532,6 +1537,8 @@ if userinput.sources != ['telelumen']: # rubik or other source, do not use per c
     # calculate radiance lux
     radiance_lux_h = radiance_simulation(userinput.iesfile[0], sensor_type='horizontal') 
     radiance_lux_v = radiance_simulation(userinput.iesfile[0], sensor_type='vertical') 
+    if userinput.sensor_grid == True:
+        radiance_lux_grid = radiance_simulation(userinput.iesfile[0], sensor_type='grid_horizontal')
 
     spd_100_percent = np.sum([np.array(sources["spds"].iloc[i]) for i in range(len(sources))], axis=0) # spd of sources 100% on
     power_inputs = np.vstack((wavelengths, spd_100_percent))
@@ -1674,12 +1681,13 @@ else: # telelumen, use per channel data from json, add dimming curves, etc
         
         radiance_lux_h += [radiance_simulation(source_type='telelumen', ies2rad_input=rad_params, sensor_type='horizontal')]
         radiance_lux_v += [radiance_simulation(source_type='telelumen', ies2rad_input=rad_params, sensor_type='vertical')]
-        radiance_lux_gh += [radiance_simulation(source_type='telelumen', ies2rad_input=rad_params, sensor_type='grid_horizontal')]
+        if userinput.sensor_grid == True:
+            radiance_lux_gh += [radiance_simulation(source_type='telelumen', ies2rad_input=rad_params, sensor_type='grid_horizontal')]
 
 
         print ("rl, h", radiance_lux_h)
         print("rl, v", radiance_lux_v)
-        print("rl, gh", radiance_lux_gh)
+        # print("rl, gh", radiance_lux_gh)
     max_power = lumens_per_channel
     print("mp", max_power)
 
@@ -1709,7 +1717,7 @@ else: # telelumen, use per channel data from json, add dimming curves, etc
 
 # problem = optimization_problem(sources, wavelengths, radiance_lux_h, radiance_lux_v, max_power,
 #                                target_medi_nonhuman=None,
-#                                species=species, objective=objectives, dim_curves=ordered_curves) # set up the problem
+#                                species=species, objective=objectives, dim_curves=ordered_curves, sensor_grid=userinput.sensor_grid) # set up the problem
 
 # algorithm = NSGA2(
 #     pop_size=250,
