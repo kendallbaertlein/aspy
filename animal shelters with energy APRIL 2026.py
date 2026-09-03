@@ -1,3 +1,4 @@
+import ast 
 import colour
 import json # read file from steve
 import luxpy as lx
@@ -798,55 +799,178 @@ def get_standard_material(dataset_name, sample_name, bins=27, start_nm=380, end_
     return sd.values / 100.0  # (Colour-science stores reflectance as percentages 0-100)
 
 
-def radiance_simulation(source_type='telelumen', ies2rad_input=None, sensor_type='horizontal', eye_h=1.6): 
-    # TODO: add options for honeybee + grasshopper
-    # TODO: import obj file
+# def radiance_simulation(source_type='telelumen', ies2rad_input=None, sensor_type='horizontal', eye_h=1.6): 
+#     # TODO: add options for honeybee + grasshopper
+#     # TODO: import obj file
 
+#     room_l = 1.82
+#     room_w = 2.23
+#     room_h = 2.69
+#     desk_l = 1.22
+#     desk_w = 0.61
+#     desk_h = 0.76
+#     # desk_h = room_h - 1 # height of the desk surface from the floor
+
+#     scene_text = f"""
+#     # materials
+
+#     # walls 
+#     void plastic white_wall
+#     0
+#     0
+#     5 0.9 0.9 0.9 0.01 0.01
+
+#     void plastic acoustic_ceiling 
+#     0 
+#     0 
+#     5 0.88 0.88 0.88 0.02 0.05
+
+#     # floor
+#     void plastic carpet_floor
+#     0
+#     0
+#     5 0.2 0.2 0.2 0.01 0.01
+
+#     # wood desk
+#     void plastic wood_desk
+#     0
+#     0
+#     5 0.4 0.3 0.2 0.05 0.1
+
+#     # room
+#     !genbox white_wall room {room_l} {room_w} {room_h} -i
+# """
+#     # # desk
+#     # !genbox wood_desk desk_surface {desk_l} {desk_w} {desk_h} | xform -t {(room_l - desk_l) / 2} {(room_w - desk_w) / 2} 0
+#     # """
+#     # write the scene file
+#     with open("room.rad", "w") as f:
+#         f.write(scene_text)
+
+#     # import the ies file 
+#     if source_type == "telelumen":
+#         ies_file_name = "telelumen octa ies file 22dec18.ies"
+#     elif source_type == "rubik":
+#         ies_file_name = "RUBIK_9CS_90CRI_35K_STWH_440LM.ies"
+#     elif source_type == "white":
+#         ies_file_name = "white.ies"
+#     elif source_type == "reference":
+#         ies_file_name = "SVT-2x2-3000LM-DO-SD-MVOLT-ST-IES.ies"
+
+#     else:
+#         raise ValueError(f"Source type {source_type} not recognized. Please choose from: telelumen, rubik.")
+#     ies2rad_kwargs = _build_ies2rad_kwargs(ies2rad_input)
+#     if ies2rad_kwargs:
+#         pr.ies2rad(ies_file_name, outname="light_source", **ies2rad_kwargs)
+#     else:
+#         pr.ies2rad(ies_file_name, outname="light_source")
+
+#     # center of the ceiling
+#     center_x = room_l / 2
+#     center_y = room_w / 2
+#     z_height = room_h - 0.05 # Mounted flush/slightly dropped from ceiling
+
+#     # spacing between cells (8 inches = ~0.2 meters)
+#     spacing = 0.2 
+
+#     # light placement string 
+#     if source_type == "telelumen" or source_type == "reference":
+#         light_placement = "# Light Fixture\n"
+#         light_placement += f"!xform -t {0.52} {0.8} {z_height} light_source.rad\n"
+        
+#     elif source_type == "white": # place in center of ceiling, no duplicates
+#         # place in center of ceiling, no duplicates
+#         light_placement = "# Light Fixture\n"
+#         light_placement += f"!xform -t {center_x:.3f} {center_y:.3f} {z_height} light_source.rad\n"
+
+#     elif source_type == "rubik": # place nine cells
+#         light_placement = "# 9-Cell Rubik Fixture (2x2 ft)\n"
+
+#         # Loop through X offsets (-0.2, 0, 0.2)
+#         for dx in [-spacing, 0, spacing]:
+#             # Loop through Y offsets (-0.2, 0, 0.2)
+#             for dy in [-spacing, 0, spacing]:
+                
+#                 # Calculate final coordinates for this specific cell
+#                 cell_x = center_x + dx
+#                 cell_y = center_y + dy
+                
+#                 # Append this cell to the Radiance file text
+#                 light_placement += f"!xform -t {cell_x:.3f} {cell_y:.3f} {z_height} light_source.rad\n"
+#     else:
+#         raise ValueError(f"Source type {source_type} not recognized. Please choose from: telelumen, rubik, white.")
+
+#     # write the light placement file
+#     with open("luminaires.rad", "w") as f:
+#         f.write(light_placement)
+
+#     # compile octree
+#     octree_bytes = pr.oconv("room.rad", "luminaires.rad")
+
+#     # write octree to file
+#     with open("scene.oct", "wb") as f:
+#         f.write(octree_bytes)
+
+#     # define sensor
+#     # if source_type == "telelumen":
+#     if sensor_type == "horizontal":
+#             sensor_string = f"{1.22} {0.8} {desk_h} 0 0 1\n"
+#     elif sensor_type == "vertical":
+#         sensor_string = f"{1.22} {0.8} {eye_h} -1 0 0\n"
+#     # else: 
+#     #     if sensor_type == "horizontal":
+#     #         sensor_string = f"{room_l / 2} {room_w / 2} {desk_h} 0 0 1\n"
+#     #     elif sensor_type == "vertical":
+#     #         sensor_string = f"{room_l / 2} {room_w / 2} {eye_h} 0 1 0\n"
+#     else:
+#         raise ValueError(f"Sensor type {sensor_type} not recognized. Please choose from: horizontal, vertical.")
+#     sensor_point = sensor_string.encode('utf-8')
+
+#     # run
+#     res_bytes = pr.rtrace(
+#         sensor_point, 
+#         "scene.oct", 
+#         header=False, # header=False ensures it only returns the numbers, not the Radiance header text
+#         params=["-I", "-ab", "7", "-ad", "2048", "-as", "1024", "-h"]    
+#         )
+
+#     # calculate lux
+#     res_str = res_bytes.decode('utf-8') # turn into python string
+#     lines = res_str.strip().splitlines() # split the output into lines and remove any leading/trailing whitespace
+#     data_line = lines[-1] # grab only the very last line (where the RGB data lives)
+#     r, g, b = map(float, data_line.split()) # split that specific line into the 3 numbers 
+#     lux = 179 * (0.265 * r + 0.670 * g + 0.065 * b) # calculate illuminance
+
+#     print(f"Calculated Illuminance on Desk: {lux:.2f} Lux")
+
+#     return lux
+
+def radiance_simulation(source_type='telelumen', ies2rad_input=None, sensor_type='horizontal', eye_h=1.6, grid_spacing=0.15, wall_offset=0.15):
     room_l = 1.82
     room_w = 2.23
     room_h = 2.69
     desk_l = 1.22
     desk_w = 0.61
     desk_h = 0.76
-    # desk_h = room_h - 1 # height of the desk surface from the floor
 
+    # -------------------------------------------------------------------------
+    # Scene and Geometry Generation (Maintained from your calibrated setup)
+    # -------------------------------------------------------------------------
     scene_text = f"""
     # materials
-
-    # walls 
-    void plastic white_wall
-    0
-    0
-    5 0.9 0.9 0.9 0.01 0.01
-
-    void plastic acoustic_ceiling 
-    0 
-    0 
-    5 0.88 0.88 0.88 0.02 0.05
-
-    # floor
-    void plastic carpet_floor
-    0
-    0
-    5 0.2 0.2 0.2 0.01 0.01
-
-    # wood desk
-    void plastic wood_desk
-    0
-    0
-    5 0.4 0.3 0.2 0.05 0.1
+    void plastic white_wall 0 0 5 0.9 0.9 0.9 0.01 0.01
+    void plastic acoustic_ceiling 0 0 5 0.88 0.88 0.88 0.02 0.05
+    void plastic carpet_floor 0 0 5 0.2 0.2 0.2 0.01 0.01
+    void plastic wood_desk 0 0 5 0.4 0.3 0.2 0.05 0.1
 
     # room
     !genbox white_wall room {room_l} {room_w} {room_h} -i
-"""
-    # # desk
-    # !genbox wood_desk desk_surface {desk_l} {desk_w} {desk_h} | xform -t {(room_l - desk_l) / 2} {(room_w - desk_w) / 2} 0
-    # """
-    # write the scene file
+    """
+
     with open("room.rad", "w") as f:
         f.write(scene_text)
 
-    # import the ies file 
+    # Import and compile IES
     if source_type == "telelumen":
         ies_file_name = "telelumen octa ies file 22dec18.ies"
     elif source_type == "rubik":
@@ -855,96 +979,121 @@ def radiance_simulation(source_type='telelumen', ies2rad_input=None, sensor_type
         ies_file_name = "white.ies"
     elif source_type == "reference":
         ies_file_name = "SVT-2x2-3000LM-DO-SD-MVOLT-ST-IES.ies"
-
     else:
-        raise ValueError(f"Source type {source_type} not recognized. Please choose from: telelumen, rubik.")
+        raise ValueError(f"Source type {source_type} not recognized.")
+
     ies2rad_kwargs = _build_ies2rad_kwargs(ies2rad_input)
     if ies2rad_kwargs:
         pr.ies2rad(ies_file_name, outname="light_source", **ies2rad_kwargs)
     else:
         pr.ies2rad(ies_file_name, outname="light_source")
 
-    # center of the ceiling
+    # Light Placement
     center_x = room_l / 2
     center_y = room_w / 2
-    z_height = room_h - 0.05 # Mounted flush/slightly dropped from ceiling
+    z_height = room_h - 0.05
+    spacing = 0.2
 
-    # spacing between cells (8 inches = ~0.2 meters)
-    spacing = 0.2 
-
-    # light placement string 
-    if source_type == "telelumen" or source_type == "reference":
+    if source_type in ["telelumen", "reference"]:
         light_placement = "# Light Fixture\n"
         light_placement += f"!xform -t {0.52} {0.8} {z_height} light_source.rad\n"
-        
-    elif source_type == "white": # place in center of ceiling, no duplicates
-        # place in center of ceiling, no duplicates
+    elif source_type == "white":
         light_placement = "# Light Fixture\n"
         light_placement += f"!xform -t {center_x:.3f} {center_y:.3f} {z_height} light_source.rad\n"
-
-    elif source_type == "rubik": # place nine cells
+    elif source_type == "rubik":
         light_placement = "# 9-Cell Rubik Fixture (2x2 ft)\n"
-
-        # Loop through X offsets (-0.2, 0, 0.2)
         for dx in [-spacing, 0, spacing]:
-            # Loop through Y offsets (-0.2, 0, 0.2)
             for dy in [-spacing, 0, spacing]:
-                
-                # Calculate final coordinates for this specific cell
-                cell_x = center_x + dx
-                cell_y = center_y + dy
-                
-                # Append this cell to the Radiance file text
-                light_placement += f"!xform -t {cell_x:.3f} {cell_y:.3f} {z_height} light_source.rad\n"
-    else:
-        raise ValueError(f"Source type {source_type} not recognized. Please choose from: telelumen, rubik, white.")
+                light_placement += f"!xform -t {center_x + dx:.3f} {center_y + dy:.3f} {z_height} light_source.rad\n"
 
-    # write the light placement file
     with open("luminaires.rad", "w") as f:
         f.write(light_placement)
 
-    # compile octree
     octree_bytes = pr.oconv("room.rad", "luminaires.rad")
-
-    # write octree to file
     with open("scene.oct", "wb") as f:
         f.write(octree_bytes)
 
-    # define sensor
-    # if source_type == "telelumen":
+    # -------------------------------------------------------------------------
+    # Plane Grid Generation vs. Single Point Raytracing
+    # -------------------------------------------------------------------------
     if sensor_type == "horizontal":
-            sensor_string = f"{1.22} {0.8} {desk_h} 0 0 1\n"
+        # Standard Single Point (Desk Height)
+        sensor_string = f"{1.22} {0.8} {desk_h} 0 0 1\n"
+        sensor_points = [ (1.22, 0.8) ]
     elif sensor_type == "vertical":
+        # Standard Single Point (Eye Height)
         sensor_string = f"{1.22} {0.8} {eye_h} -1 0 0\n"
-    # else: 
-    #     if sensor_type == "horizontal":
-    #         sensor_string = f"{room_l / 2} {room_w / 2} {desk_h} 0 0 1\n"
-    #     elif sensor_type == "vertical":
-    #         sensor_string = f"{room_l / 2} {room_w / 2} {eye_h} 0 1 0\n"
+        sensor_points = [ (1.22, 0.8) ]
+    elif sensor_type == "grid_horizontal":
+        # New Plane Grid: Generate 2D coordinates across the room at desk height
+        # Wall offset avoids hitting wall boundaries where geometry edges can cause ray anomalies
+        x_coords = np.arange(wall_offset, room_l - wall_offset + grid_spacing/2, grid_spacing)
+        y_coords = np.arange(wall_offset, room_w - wall_offset + grid_spacing/2, grid_spacing)
+        
+        sensor_lines = []
+        sensor_points = []
+        for x in x_coords:
+            for y in y_coords:
+                sensor_lines.append(f"{x:.3f} {y:.3f} {desk_h:.3f} 0 0 1")
+                sensor_points.append((x, y))
+        sensor_string = "\n".join(sensor_lines) + "\n"
     else:
-        raise ValueError(f"Sensor type {sensor_type} not recognized. Please choose from: horizontal, vertical.")
-    sensor_point = sensor_string.encode('utf-8')
+        raise ValueError(f"Sensor type '{sensor_type}' not recognized.")
 
-    # run
+    # Convert coordinates to binary stream for rtrace
+    sensor_bytes = sensor_string.encode('utf-8')
+
+    # Run the raytracer
     res_bytes = pr.rtrace(
-        sensor_point, 
-        "scene.oct", 
-        header=False, # header=False ensures it only returns the numbers, not the Radiance header text
-        params=["-I", "-ab", "6", "-ad", "2048", "-as", "1024", "-h"]    
-        )
+        sensor_bytes,
+        "scene.oct",
+        header=False,
+        params=["-I", "-ab", "7", "-ad", "2048", "-as", "1024", "-h"]
+    )
 
-    # calculate lux
-    res_str = res_bytes.decode('utf-8') # turn into python string
-    lines = res_str.strip().splitlines() # split the output into lines and remove any leading/trailing whitespace
-    data_line = lines[-1] # grab only the very last line (where the RGB data lives)
-    r, g, b = map(float, data_line.split()) # split that specific line into the 3 numbers 
-    lux = 179 * (0.265 * r + 0.670 * g + 0.065 * b) # calculate illuminance
+    # Parse output lines
+    res_str = res_bytes.decode('utf-8')
+    lines = res_str.strip().splitlines()
+    
+    lux_values = []
+    for line in lines:
+        cleaned_line = line.strip()
+        if not cleaned_line:
+            continue
+        
+        # Robustly skip Radiance text headers (any lines that cannot be split into 3 floats)
+        try:
+            r, g, b = map(float, cleaned_line.split())
+            # Calculate photopic lux using Radiance standard V(lambda) weights
+            lux = 179 * (0.265 * r + 0.670 * g + 0.065 * b)
+            lux_values.append(lux)
+        except ValueError:
+            # Safely skip non-numeric header lines like '#?RADIANCE' or 'FORMAT=ascii'
+            continue
 
-    print(f"Calculated Illuminance on Desk: {lux:.2f} Lux")
-
-    return lux
-
-
+    # -------------------------------------------------------------------------
+    # Format and Return Output (Restores 100% backward compatibility)
+    # -------------------------------------------------------------------------
+    if sensor_type in ["horizontal", "vertical"]:
+        # Return a single float value so your existing loops do not break
+        return float(lux_values[0]) if lux_values else 0.0
+    
+    else:
+        # Return the rich dictionary for grid metrics
+        avg_lux = np.mean(lux_values) if lux_values else 0.0
+        min_lux = np.min(lux_values) if lux_values else 0.0
+        max_lux = np.max(lux_values) if lux_values else 0.0
+        uniformity = min_lux / avg_lux if avg_lux > 0 else 0.0
+        
+        return {
+            # "coordinates": sensor_points,
+            # "lux_grid": lux_values,
+            "average_lux": avg_lux,
+            "min_lux": min_lux,
+            "max_lux": max_lux,
+            "uniformity_ratio": uniformity
+        }
+    
 def render_optimized_space_spectral(solution_vars, problem, raw_json_data, wavelengths, base_ies_lumens=2500.0, filename="optimized_spectral_render.hdr"):
     print(f"\n--- Starting N=9 Spectral Render for {filename} ---")
     
@@ -1363,18 +1512,22 @@ species = userinput.species # define what species the optimization is for
 
 if userinput.sources != ['telelumen']: # rubik or other source, do not use per channel data
     # print("if")
-
-    # read in data about spds for the light sources 
-    df = pd.read_excel('Light Sources.xlsx', sheet_name = userinput.sources) 
-    if isinstance(df, dict):
-        # if multiple sheets were read
-        df = pd.concat(df.values(), axis=1)
-    df = df.loc[:, ~df.columns.duplicated()]
-    wavelengths = df['Wavelength']
-    df = df.drop(columns="Wavelength")
-    sources = cols_to_df(df.columns, df)
-    sources = sources.rename(columns={"values": "spds"})
-    # print(sources)
+    if userinput.sources == ['telelumen_lab']:
+        wavelengths = pd.read_csv("tlwav.csv", header=None).values.flatten() # input wavelengths for luxpy power calculation
+        sources = pd.read_csv("tl.csv") # input spds for luxpy power calculation
+        sources["spds"] = sources["spds"].apply(ast.literal_eval) # ensure numpy array is read in as a list of floats, not a string
+    else:
+        # read in data about spds for the light sources 
+        df = pd.read_excel('Light Sources.xlsx', sheet_name = userinput.sources) 
+        if isinstance(df, dict):
+            # if multiple sheets were read
+            df = pd.concat(df.values(), axis=1)
+        df = df.loc[:, ~df.columns.duplicated()]
+        wavelengths = df['Wavelength']
+        df = df.drop(columns="Wavelength")
+        sources = cols_to_df(df.columns, df)
+        sources = sources.rename(columns={"values": "spds"})
+        # print(sources)
 
     # calculate radiance lux
     radiance_lux_h = radiance_simulation(userinput.iesfile[0], sensor_type='horizontal') 
@@ -1390,6 +1543,7 @@ else: # telelumen, use per channel data from json, add dimming curves, etc
     # input sources and calculate radiance lux
     radiance_lux_h = []
     radiance_lux_v = []
+    radiance_lux_gh = []
     file_path = "telelumen_calibration.json"
 
     with open(file_path, 'r') as f:
@@ -1425,13 +1579,13 @@ else: # telelumen, use per channel data from json, add dimming curves, etc
                 dimming_data_raw[channel]["y_measured_out"].append(output_energy)
 
 
-    for n in range(len(spds_100)):
-        plt.plot(wavelengths, spds_100[list(spds_100.keys())[n]], label=list(spds_100.keys())[n])
-    plt.xlabel("Wavelength (nm)")
-    plt.ylabel("Spectral Power Distribution")
-    plt.title("Spectral Power Distributions")
-    plt.legend()
-    plt.show()
+    # for n in range(len(spds_100)):
+    #     plt.plot(wavelengths, spds_100[list(spds_100.keys())[n]], label=list(spds_100.keys())[n])
+    # plt.xlabel("Wavelength (nm)")
+    # plt.ylabel("Spectral Power Distribution")
+    # plt.title("Spectral Power Distributions")
+    # plt.legend()
+    # plt.show()
     # set up dimming curves
     dimming_curves = {}
 
@@ -1467,7 +1621,7 @@ else: # telelumen, use per channel data from json, add dimming curves, etc
     for channel_name in sources.index:  
         ordered_curves.append(dimming_curves_df.loc[channel_name, 'curve'])
 
-    base_ies_lumens = 2500.0  # total lumen output from ies file
+    base_ies_lumens = 996.12 # 2500.0  # total lumen output from ies file
 
     radiance_channel_params = {}
     lumens_per_channel = []
@@ -1520,8 +1674,12 @@ else: # telelumen, use per channel data from json, add dimming curves, etc
         
         radiance_lux_h += [radiance_simulation(source_type='telelumen', ies2rad_input=rad_params, sensor_type='horizontal')]
         radiance_lux_v += [radiance_simulation(source_type='telelumen', ies2rad_input=rad_params, sensor_type='vertical')]
+        radiance_lux_gh += [radiance_simulation(source_type='telelumen', ies2rad_input=rad_params, sensor_type='grid_horizontal')]
 
-        print ("rl", radiance_lux_h, radiance_lux_v)
+
+        print ("rl, h", radiance_lux_h)
+        print("rl, v", radiance_lux_v)
+        print("rl, gh", radiance_lux_gh)
     max_power = lumens_per_channel
     print("mp", max_power)
 
