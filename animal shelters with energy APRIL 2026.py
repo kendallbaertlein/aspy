@@ -1310,13 +1310,14 @@ class optimization_problem(ElementwiseProblem):
     def __init__(self, sources, wavelengths, rad_illuminance_h, rad_illuminance_v, max_lp_illuminance, 
                  target_illuminance_h=750, max_illum_h=1125, target_illuminance_v=0, target_medi=275, 
                  target_medi_nonhuman=0, min_dim=0.2, max_dim=10.0, species="Human", nonhuman_species=None,
-                 objective=None, dim_curves=None, sensor_grid=False):
+                 objective=None, dim_curves=None, sensor_grid=False, rad_illuminance_gh=None):
         # initialize variables        
         self.sources = sources # sources dataframe with spds
         self.wavelengths = wavelengths # wavelengths for the spds
         self.n_sources = len(sources) # count of channels
         self.rad_illuminance_h = rad_illuminance_h # illuminance from radiance simulation (horizontal)
         self.rad_illuminance_v = rad_illuminance_v # illuminance from radiance simulation (vertical)
+        self.rad_illuminance_gh = rad_illuminance_gh # illuminance from radiance simulation (global horizontal)
         # print("radi",rad_illuminance)
         self.max_lp_illuminance = max_lp_illuminance # illuminance from luxpy simulation 
         # print("lpi", max_lp_illuminance)
@@ -1341,7 +1342,9 @@ class optimization_problem(ElementwiseProblem):
 
         sg = 0
         if self.sensor_grid==True:
-            sg = 2
+            sg = 3
+            if self.rad_illuminance_gh is None:
+                raise ValueError("rad_illuminance_gh must be provided if sensor_grid is True")
 
         # count of constraints : 2 CCT, 6 TM30, 2 Illuminance (horizontal, +2 if sensor grid is used), 1 MEDI if human (2 if nonhuman species is included), 
         if nonhuman_species is not None:
@@ -1389,7 +1392,11 @@ class optimization_problem(ElementwiseProblem):
         resulting_spd = np.zeros(len(self.wavelengths))
         spd_on_desk = np.zeros(len(self.wavelengths))
         spd_at_eye = np.zeros(len(self.wavelengths))
-        illuminance_h_val = 0.0
+        if self.sensor_grid:
+            num_points = len(self.rad_illuminance_gh["lux_grid"])
+            illuminance_gh_val = np.zeros(num_points)
+        else:
+            illuminance_h_val = 0.0
         illuminance_v_val = 0.0
 
         for n in range(self.n_sources):
@@ -1408,7 +1415,13 @@ class optimization_problem(ElementwiseProblem):
             if not tmp: # per channel illuminance, need to loop over channels
                 illuminance_h_val += actual_dimming * self.rad_illuminance_h[n]
                 h_transfer_factor = self.rad_illuminance_h[n] / self.max_lp_illuminance[n]
-                spd_on_desk += (actual_dimming * source_spectrum * h_transfer_factor)
+                if self.sensor_grid:
+                    channel_grid = np.array(self.rad_illuminance_gh["lux_grid"][n]) 
+                    illuminance_gh_val += actual_dimming * channel_grid
+                    gh_transfer_factor = self.rad_illuminance_gh[n]['average_lux'] / self.max_lp_illuminance[n]
+                    spd_on_desk += (actual_dimming * source_spectrum * gh_transfer_factor)
+                else:
+                    spd_on_desk += (actual_dimming * source_spectrum * h_transfer_factor)
 
                 illuminance_v_val += actual_dimming * self.rad_illuminance_v[n]
                 v_transfer_factor = self.rad_illuminance_v[n] / self.max_lp_illuminance[n] # scale
@@ -1418,10 +1431,15 @@ class optimization_problem(ElementwiseProblem):
             spds_combined = np.vstack((self.wavelengths, resulting_spd))
             calculated_power = lx.spd_to_power(spds_combined, ptype='pu')
             calculated_power_val = float(np.asarray(calculated_power).item())
-            
+
             h_scaling_factor = self.rad_illuminance_h / self.max_lp_illuminance
             illuminance_h_val = calculated_power_val * h_scaling_factor
-            spd_on_desk = resulting_spd * h_scaling_factor
+            if self.sensor_grid:
+                illuminance_gh_val = actual_dimming * np.array(self.rad_illuminance_gh["lux_grid"])
+                gh_transfer_factor = self.rad_illuminance_gh[n]['average_lux'] / self.max_lp_illuminance[n]
+                spd_on_desk = (actual_dimming * source_spectrum * gh_transfer_factor)
+            else:
+                spd_on_desk = resulting_spd * h_scaling_factor
 
             v_scaling_factor = self.rad_illuminance_v / self.max_lp_illuminance
             illuminance_v_val = calculated_power_val * v_scaling_factor
@@ -1476,13 +1494,32 @@ class optimization_problem(ElementwiseProblem):
         constraints.append(85.0 - tm30_bin1_rf_val)            # TM30 Bin 1 Rf >= 78
         constraints.append(-0.07 - tm30_bin1_chroma_val)        # TM30 Bin 1 Chroma >= -7%
         constraints.append(tm30_bin1_chroma_val - 0.07)         # TM30 Bin 1 Chroma <= 7%
-        constraints.append(self.target_illuminance_h - illuminance_h_val) # Lux >= Target
-        constraints.append(illuminance_h_val - self.max_illum_h) # Lux <= Maximum
+        # constraints.append(self.target_illuminance_h - illuminance_h_val) # Lux >= Target
+        # constraints.append(illuminance_h_val - self.max_illum_h) # Lux <= Maximum
         # constraints.append(self.target_illuminance_v - illuminance_v_val) # Lux >= Target
         constraints.append(self.target_medi - medi_val)        # MEDI >= Target
         if self.species_nonhuman is not None:
             constraints.append(self.target_medi_nonhuman - medi_nonhuman_val)
         out["G"] = constraints
+
+        if self.is_grid:
+            min_lux = np.min(illuminance_gh_val)
+            max_lux = np.max(illuminance_gh_val)
+            avg_lux = np.mean(illuminance_gh_val)
+
+            # Formulate grid criteria:
+            # 1. Min >= lower bound -> lower_bound - min <= 0
+            constraints.append(self.target_illuminance_h - min_lux)
+            # 2. Max <= upper bound -> max - upper_bound <= 0
+            constraints.append(max_lux - self.max_illum_h)
+            # 3. Max/Min <= 5:1 -> max - 5 * min <= 0
+            constraints.append(max_lux - (5.0 * min_lux))
+            # 4. Min/Avg >= 0.6 -> 0.6 * avg - min <= 0
+            constraints.append((0.6 * avg_lux) - min_lux)
+        else:
+            # Standard single-point bounds
+            constraints.append(self.target_illuminance_h - illuminance_h_val) 
+            constraints.append(illuminance_h_val - self.max_illum_h)          
 
         actual_dimming = dim_variables * on_off_variables
 
@@ -1691,124 +1728,124 @@ else: # telelumen, use per channel data from json, add dimming curves, etc
     max_power = lumens_per_channel
     print("mp", max_power)
 
-# # print(sources)
-# # print(dimming_curves_df)
-# # print(radiance_lux)
+# print(sources)
+# print(dimming_curves_df)
+# print(radiance_lux)
         
-# # for n in range(len(sources)):
-# #     luxpy_power = lx.spd_to_power(np.vstack((wavelengths, np.array(sources["spds"].iloc[n]))), ptype='pu')
-# #     pow_per_channel.append(float(np.asarray(luxpy_power).item()))
+# for n in range(len(sources)):
+#     luxpy_power = lx.spd_to_power(np.vstack((wavelengths, np.array(sources["spds"].iloc[n]))), ptype='pu')
+#     pow_per_channel.append(float(np.asarray(luxpy_power).item()))
 
-# # define objectives
-# # objectives = ['max_medi', 'min_medi', 'max_tm30_rf', 'max_tm30_rg', 'max_cct', 'min_cct', "max_illuminance", "min_illuminance", "min_sources"]
-# # objectives = ['min_sources']
-# # objectives = ['max_tm30_rf', 'max_tm30_rg']
-# objectives = ['max_medi', 'max_tm30_rf', 'max_tm30_rg', "max_illuminance", "min_sources"] # objectives i want to consider
+# define objectives
+# objectives = ['max_medi', 'min_medi', 'max_tm30_rf', 'max_tm30_rg', 'max_cct', 'min_cct', "max_illuminance", "min_illuminance", "min_sources"]
+# objectives = ['min_sources']
+# objectives = ['max_tm30_rf', 'max_tm30_rg']
+objectives = ['max_medi', 'max_tm30_rf', 'max_tm30_rg', "max_illuminance", "min_sources"] # objectives i want to consider
 
-# start_time = time.time() # start timer for this optimization run
+start_time = time.time() # start timer for this optimization run
 
-# print(f"starting optimization for {objectives}")
-# print("inputs")
-# print("horizontal", radiance_lux_h)
-# print("vertical", radiance_lux_v)
-# print("max_power", max_power)
+print(f"starting optimization for {objectives}")
+print("inputs")
+print("horizontal", radiance_lux_h)
+print("vertical", radiance_lux_v)
+print("max_power", max_power)
 
-# print("total horizontal illuminance from radiance simulation: ", sum(radiance_lux_h))
+print("total horizontal illuminance from radiance simulation: ", sum(radiance_lux_h))
 
-# problem = optimization_problem(sources, wavelengths, radiance_lux_h, radiance_lux_v, max_power,
-#                                target_medi_nonhuman=None,
-#                                species=species, objective=objectives, dim_curves=ordered_curves, sensor_grid=userinput.sensor_grid) # set up the problem
+problem = optimization_problem(sources, wavelengths, radiance_lux_h, radiance_lux_v, max_power,
+                               target_medi_nonhuman=None,
+                               species=species, objective=objectives, dim_curves=ordered_curves, sensor_grid=userinput.sensor_grid, rad_illuminance_gh=radiance_lux_gh) # set up the problem
 
-# algorithm = NSGA2(
-#     pop_size=250,
-#     sampling=MixedVariableSampling(),
-#     mating=MixedVariableMating(eliminate_duplicates=MixedVariableDuplicateElimination()),
-#     eliminate_duplicates=MixedVariableDuplicateElimination()
-# ) # define how it will be solved
+algorithm = NSGA2(
+    pop_size=250,
+    sampling=MixedVariableSampling(),
+    mating=MixedVariableMating(eliminate_duplicates=MixedVariableDuplicateElimination()),
+    eliminate_duplicates=MixedVariableDuplicateElimination()
+) # define how it will be solved
 
-# res = minimize(problem, algorithm, ('n_gen', 150), seed=1, verbose=True) # run the problem
+res = minimize(problem, algorithm, ('n_gen', 150), seed=1, verbose=True) # run the problem
 
-# print("optimization complete")
+print("optimization complete")
 
-# end_time = time.time() # end timer for this optimization run
-# elapsed_time = end_time - start_time
-# print(f"\nElapsed Time for this optimization: {elapsed_time:.2f} seconds")
+end_time = time.time() # end timer for this optimization run
+elapsed_time = end_time - start_time
+print(f"\nElapsed Time for this optimization: {elapsed_time:.2f} seconds")
 
-# import datetime
+import datetime
 
-# def save_results_to_csv(res, problem, objectives, F_display, all_metrics, filename="optimization_results.csv"):
-#     """Saves the optimization inputs, constraints, and outputs to a CSV."""
-#     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def save_results_to_csv(res, problem, objectives, F_display, all_metrics, filename="optimization_results.csv"):
+    """Saves the optimization inputs, constraints, and outputs to a CSV."""
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-#     # 1. Capture the Inputs & Constraints from the problem definition
-#     inputs_summary = {
-#         "Timestamp": timestamp,
-#         "Target Illuminance (H)": problem.target_illuminance_h,
-#         "Target Illuminance (V)": problem.target_illuminance_v,
-#         "Target MEDI": problem.target_medi,
-#         "Target MEDI (Non-Human)": problem.target_medi_nonhuman,
-#         "Min Dimming": problem.min_dim,
-#         "Max Dimming": problem.max_dim,
-#         "Objectives Optimized": " | ".join(objectives)
-#     }
+    # 1. Capture the Inputs & Constraints from the problem definition
+    inputs_summary = {
+        "Timestamp": timestamp,
+        "Target Illuminance (H)": problem.target_illuminance_h,
+        "Target Illuminance (V)": problem.target_illuminance_v,
+        "Target MEDI": problem.target_medi,
+        "Target MEDI (Non-Human)": problem.target_medi_nonhuman,
+        "Min Dimming": problem.min_dim,
+        "Max Dimming": problem.max_dim,
+        "Objectives Optimized": " | ".join(objectives)
+    }
     
-#     data = []
-#     solutions_list = [res.X] if isinstance(res.X, dict) else res.X
+    data = []
+    solutions_list = [res.X] if isinstance(res.X, dict) else res.X
     
-#     # 2. Iterate through all solutions on the Pareto front
-#     for i, sol in enumerate(solutions_list):
-#         row = {"Solution_Index": i}
-#         row.update(inputs_summary) 
+    # 2. Iterate through all solutions on the Pareto front
+    for i, sol in enumerate(solutions_list):
+        row = {"Solution_Index": i}
+        row.update(inputs_summary) 
         
-#         # Add the raw decision variables (on/off and dimming levels)
-#         for k, v in sol.items():
-#             row[k] = v
+        # Add the raw decision variables (on/off and dimming levels)
+        for k, v in sol.items():
+            row[k] = v
             
-#         # Add the true (un-negated) objective values
-#         for j, obj_name in enumerate(objectives):
-#             row[f"Obj: {obj_name}"] = F_display[i, j]
+        # Add the true (un-negated) objective values
+        for j, obj_name in enumerate(objectives):
+            row[f"Obj: {obj_name}"] = F_display[i, j]
             
-#         # Add the physical metrics calculated for this specific solution
-#         if all_metrics[i]:
-#             for metric_name, metric_val in all_metrics[i].items():
-#                 row[f"Metric: {metric_name}"] = metric_val
+        # Add the physical metrics calculated for this specific solution
+        if all_metrics[i]:
+            for metric_name, metric_val in all_metrics[i].items():
+                row[f"Metric: {metric_name}"] = metric_val
                 
-#         data.append(row)
+        data.append(row)
         
-#     # 3. Save to CSV
-#     df = pd.DataFrame(data)
-#     # Generate a unique filename with the timestamp
-#     safe_time = timestamp.replace(":", "-").replace(" ", "_")
-#     final_filename = f"opt_results_{safe_time}.csv"
+    # 3. Save to CSV
+    df = pd.DataFrame(data)
+    # Generate a unique filename with the timestamp
+    safe_time = timestamp.replace(":", "-").replace(" ", "_")
+    final_filename = f"opt_results_{safe_time}.csv"
     
-#     df.to_csv(final_filename, index=False)
-#     print(f"\nSaved optimization data to: {final_filename}")
+    df.to_csv(final_filename, index=False)
+    print(f"\nSaved optimization data to: {final_filename}")
 
-# # my_thresholds = {
-# #     'medi': 275.0,
-# #     'rf': 86.0,
-# #     'rg': 92.0,
-# #     'rf_bin1': 85.0,
-# #     'rg_bin1': -0.07,
-# #     'illuminance': 300, # min illuminance limit
-# #     'max_illuminance': 600    # Maximum illuminance limit
-# # }
+# my_thresholds = {
+#     'medi': 275.0,
+#     'rf': 86.0,
+#     'rg': 92.0,
+#     'rf_bin1': 85.0,
+#     'rg_bin1': -0.07,
+#     'illuminance': 300, # min illuminance limit
+#     'max_illuminance': 600    # Maximum illuminance limit
+# }
 
-# # # Call the updated plot_results with the thresholds dictionary appended
-# # plot_results(res, problem, objectives, sources, wavelengths, radiance_lux_h, radiance_lux_v,
-# #              max_power, species, reference=userinput.ref_source, thresholds=my_thresholds) 
-
-# # Plot/print results based on number of objectives
-# plot_results(res, problem, objectives, sources, wavelengths, radiance_lux_h, radiance_lux_v, max_power, species, reference=userinput.ref_source, ref_scale=True)
-
+# # Call the updated plot_results with the thresholds dictionary appended
 # plot_results(res, problem, objectives, sources, wavelengths, radiance_lux_h, radiance_lux_v,
-#              max_power, species, reference=userinput.ref_source, ref_scale=True, selected_sol=True)
+#              max_power, species, reference=userinput.ref_source, thresholds=my_thresholds) 
 
-# # Render a specific solution (e.g., index 0)
-# # If it's a single objective, res.X is a dict. If multiple, it's a list of dicts.
-# if isinstance(res.X, dict):
-#     best_solution = res.X 
-# else:
-#     best_solution = res.X[0] # Pick the first solution on the Pareto front (or whichever index you want)
+# Plot/print results based on number of objectives
+plot_results(res, problem, objectives, sources, wavelengths, radiance_lux_h, radiance_lux_v, max_power, species, reference=userinput.ref_source, ref_scale=True)
 
-# # render_optimized_space_spectral(best_solution, problem, raw_json_data, wavelengths, filename="my_optimized_room.hdr")
+plot_results(res, problem, objectives, sources, wavelengths, radiance_lux_h, radiance_lux_v,
+             max_power, species, reference=userinput.ref_source, ref_scale=True, selected_sol=True)
+
+# Render a specific solution (e.g., index 0)
+# If it's a single objective, res.X is a dict. If multiple, it's a list of dicts.
+if isinstance(res.X, dict):
+    best_solution = res.X 
+else:
+    best_solution = res.X[0] # Pick the first solution on the Pareto front (or whichever index you want)
+
+# render_optimized_space_spectral(best_solution, problem, raw_json_data, wavelengths, filename="my_optimized_room.hdr")
